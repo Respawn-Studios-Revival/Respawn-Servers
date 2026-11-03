@@ -47,6 +47,12 @@ async function verifyToken(token) {
   return { id: u.id, email: u.email || "" };
 }
 
+async function fetchUsername(userId) {
+  if (!isUuid(userId)) return null;
+  const rows = await sbFetch("/rest/v1/profiles?id=eq." + userId + "&select=username");
+  return rows && rows[0] ? rows[0].username : null;
+}
+
 const isUuid = s => typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
 // Game list cache (metadata only, no game data) so the lobby doesn't hit Supabase every request
@@ -87,12 +93,14 @@ function joinRoom(ws, room, id) {
   if (!rooms[room]) rooms[room] = new Map();
   if (!roomPublicVars[room]) roomPublicVars[room] = {};
   const existing = [...rooms[room].keys()];
+  const names = {};
+  rooms[room].forEach((peer, pid) => { names[pid] = peer.username || null; });
   const old = rooms[room].get(id);
   if (old && old !== ws) { old.room = null; old.id = null; try { old.close(); } catch (e) { } }
   rooms[room].set(id, ws);
-  send(ws, { type: "peers", ids: existing });
+  send(ws, { type: "peers", ids: existing, names });
   send(ws, { type: "public_vars_snapshot", vars: roomPublicVars[room] });
-  existing.forEach(pid => { const p = rooms[room].get(pid); if (p) send(p, { type: "joined", id }); });
+  existing.forEach(pid => { const p = rooms[room].get(pid); if (p) send(p, { type: "joined", id, username: ws.username || null }); });
 }
 
 function cleanup(ws) {
@@ -135,8 +143,8 @@ function handleRelay(ws, msg) {
     const target = rooms[myRoom]?.get(msg.to);
     if (target) send(target, { ...msg, from: myId });
   } else if (myRoom) {
-    const out = JSON.stringify({ ...msg, from: myId });
-    const droppable = msg.type === "var_private" || msg.type === "var_private_batch";
+    const out = JSON.stringify({ ...msg, from: myId, username: ws.username || null });
+    const droppable = msg.type === "var_private" || msg.type === "var_private_batch" || msg.type === "player_state";
     rooms[myRoom]?.forEach((peer, id) => {
       if (id === myId) return;
       if (droppable) sendDroppable(peer, out);
@@ -150,7 +158,9 @@ async function handleAuth(ws, msg) {
   if (!SUPABASE_URL) return send(ws, { type: "auth_fail", message: "Accounts are not set up on the server." });
   try {
     const user = await verifyToken(msg.token);
+    user.username = (await fetchUsername(user.id)) || null;
     ws.user = user;
+    ws.username = user.username;
     ws.token = msg.token;
     send(ws, { type: "auth_ok", user });
   } catch (e) {
@@ -250,6 +260,7 @@ wss.on("connection", ws => {
   ws.id = null;
   ws.user = null;
   ws.token = null;
+  ws.username = null;
 
   ws.on("message", async raw => {
     let msg;
