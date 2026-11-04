@@ -32,9 +32,15 @@ async function sbFetch(path, { token, method = "GET", body, prefer } = {}) {
   const headers = { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + (token || SUPABASE_ANON_KEY) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (prefer) headers.Prefer = prefer;
-  const res = await fetch(SUPABASE_URL + path, {
-    method, headers, body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(SUPABASE_URL + path, {
+      method, headers, body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (e) {
+    throw new Error(e && e.name === "TimeoutError" ? "Supabase did not answer in time." : "Could not reach Supabase: " + (e.message || e));
+  }
   const text = await res.text();
   let j = null;
   try { j = text ? JSON.parse(text) : null; } catch (e) { j = text; }
